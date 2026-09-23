@@ -507,18 +507,20 @@ class RandomGroupSplitter(Splitter):
                      log_every_n: Optional[int] = None,
                      **kwargs) -> List[Tuple[Dataset, Dataset]]:
         """Splits compounds into k-folds preserving groupings.
+
         This method performs Group K-Fold cross-validation. The unique groups
         are partitioned into `k` disjoint subsets. In each fold, compounds
         belonging to the fold's groups form the validation (`cv`) dataset, while
         compounds belonging to the remaining groups form the training (`train`)
         dataset. This ensures that no group is present in both train and validation
         sets, preventing data leakage across folds.
+
         Parameters
         ----------
         dataset: Dataset
             Dataset to be split.
         k: int
-            Number of folds to split `dataset` into.
+            Number of folds to split `dataset` into (must be at least 2).
         directories: List[str], optional (default None)
             List of length 2*k filepaths to save the result disk datasets.
             If specified, index 2*i is the train directory for fold i, and
@@ -527,26 +529,33 @@ class RandomGroupSplitter(Splitter):
             Random seed for group permutation.
         log_every_n: int, optional (default None)
             Log every n examples (kept for API compatibility).
+
         Returns
         -------
         List[Tuple[Dataset, Dataset]]
             List of length k tuples of (train, cv) where `train` and `cv` are both `Dataset`.
+
         Raises
         ------
         ValueError
-            If `k` is greater than the number of unique groups in `self.groups`.
-        AssertionError
-            If the length of `self.groups` does not match `len(dataset)`.
+            If `k < 2`, or if `k` is greater than the number of unique groups in `self.groups`,
+            or if the length of `self.groups` does not match the dataset length.
         """
         logger.info("Computing K-fold split for RandomGroupSplitter")
-        assert len(self.groups) == len(dataset)
+        groups = kwargs.get('groups', self.groups)
+        if len(groups) != len(dataset):
+            raise ValueError(
+                f"Length of groups ({len(groups)}) must match dataset length ({len(dataset)})."
+            )
+        if k < 2:
+            raise ValueError(f"k must be at least 2, but got k={k}.")
         if directories is not None:
             assert len(directories) == 2 * k
         if seed is not None:
             np.random.seed(seed)
-        # Map each distinct group identifier to its dataset indices
+        # Map each group identifier to its constituent sample indices
         group_dict: Dict[Any, List[int]] = {}
-        for idx, g in enumerate(self.groups):
+        for idx, g in enumerate(groups):
             if g not in group_dict:
                 group_dict[g] = []
             group_dict[g].append(idx)
@@ -554,18 +563,18 @@ class RandomGroupSplitter(Splitter):
         num_groups = len(unique_groups)
         if k > num_groups:
             raise ValueError(
-                f"Cannot have number of folds k={k} greater than number of groups={num_groups}"
+                f"Cannot have number of folds k={k} greater than number of groups={num_groups}."
             )
-        # Shuffle unique group keys
         shuffled_groups = np.random.permutation(unique_groups)
         group_folds = np.array_split(shuffled_groups, k)
         cv_datasets = []
         train_datasets = []
         for fold in range(k):
-            train_dir = directories[2 *
-                                    fold] if directories is not None else None
-            cv_dir = directories[2 * fold +
-                                 1] if directories is not None else None
+            if directories is not None:
+                train_dir = directories[2 * fold]
+                cv_dir = directories[2 * fold + 1]
+            else:
+                train_dir, cv_dir = None, None
             cv_group_set = set(group_folds[fold])
             cv_inds: List[int] = []
             train_inds: List[int] = []
