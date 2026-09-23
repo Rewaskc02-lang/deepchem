@@ -614,3 +614,63 @@ class TestSplitter(unittest.TestCase):
             cv_folds[1][1])
         assert len(multitask_dataset) == len(cv_folds[2][0]) + len(
             cv_folds[2][1])
+
+    def test_random_group_k_fold_split(self):
+        """Test RandomGroupSplitter.k_fold_split partitions correctly without group leakage."""
+        import numpy as np
+        import deepchem as dc
+        # 12 samples divided into 4 groups of 3 elements each
+        groups = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3]
+        X = np.arange(12).reshape(-1, 1)
+        y = np.arange(12).reshape(-1, 1)
+        dataset = dc.data.NumpyDataset(X=X, y=y)
+        k = 3
+        splitter = dc.splits.RandomGroupSplitter(groups=groups)
+        folds = splitter.k_fold_split(dataset, k=k, seed=42)
+        assert len(folds) == k
+        all_cv_indices = []
+        for train_ds, cv_ds in folds:
+            # 1. Total samples across train and cv must equal full dataset
+            assert len(train_ds) + len(cv_ds) == len(dataset)
+            # 2. Assert zero group leakage between train and cv
+            train_groups = set(np.array(groups)[train_ds.X.flatten()])
+            cv_groups = set(np.array(groups)[cv_ds.X.flatten()])
+            assert train_groups.isdisjoint(cv_groups), (
+                f"Group leakage detected! Train groups: {train_groups}, CV groups: {cv_groups}"
+            )
+            all_cv_indices.extend(cv_ds.X.flatten().tolist())
+        # 3. Every sample must be present in the cv split across all folds exactly once
+        assert sorted(all_cv_indices) == list(range(12))
+
+    def test_random_group_k_fold_split_disk_dataset(self):
+        """Test RandomGroupSplitter.k_fold_split works seamlessly on DiskDataset with custom directories."""
+        import tempfile
+        import numpy as np
+        import deepchem as dc
+        groups = ["A", "A", "B", "B", "C", "C", "D", "D"]
+        X = np.arange(8).reshape(-1, 1)
+        dataset = dc.data.DiskDataset.from_numpy(X=X)
+        k = 2
+        directories = [tempfile.mkdtemp() for _ in range(2 * k)]
+        splitter = dc.splits.RandomGroupSplitter(groups=groups)
+        folds = splitter.k_fold_split(dataset,
+                                      k=k,
+                                      directories=directories,
+                                      seed=123)
+        assert len(folds) == k
+        for train_ds, cv_ds in folds:
+            assert isinstance(train_ds, dc.data.DiskDataset)
+            assert isinstance(cv_ds, dc.data.DiskDataset)
+            assert len(train_ds) + len(cv_ds) == len(dataset)
+
+    def test_random_group_k_fold_split_invalid_k(self):
+        """Test RandomGroupSplitter.k_fold_split raises ValueError when k > num_groups."""
+        import numpy as np
+        import deepchem as dc
+        import pytest
+        groups = [0, 0, 1, 1]  # Only 2 unique groups
+        dataset = dc.data.NumpyDataset(X=np.arange(4))
+        splitter = dc.splits.RandomGroupSplitter(groups=groups)
+        # Requesting 4 folds from 2 groups must raise ValueError
+        with pytest.raises(ValueError, match="Cannot have number of folds"):
+            splitter.k_fold_split(dataset, k=4)
